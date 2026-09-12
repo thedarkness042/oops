@@ -3765,6 +3765,7 @@
           let ty = 0;
           let tw = 0;
           let tr = 0;
+          let mx = 0;
           for (const cell of cells.values()) {
             cell.animate();
             const weight = Math.max(1, cell.animRadius * cell.animRadius);
@@ -3772,6 +3773,7 @@
             ty += (cell.animY - (origin ? origin.y : 0)) * weight;
             tw += weight;
             tr += cell.animRadius;
+            if (cell.animRadius > mx) mx = cell.animRadius;
             ahk += (cell.animX - (origin ? origin.x : 0)) / mergedCount;
             py += (cell.animY - (origin ? origin.y : 0)) / mergedCount;
             this.mass += cell.staticMass;
@@ -3779,7 +3781,20 @@
               this.biggestPieceMass = cell.staticMass;
             }
           }
-          return tw ? { x: tx / tw, y: ty / tw, radii: tr } : null;
+          if (!tw) return null;
+          const cx = tx / tw;
+          const cy = ty / tw;
+          // Bounding reach: the farthest cell edge from this group's center.
+          // Used for dual framing so split pieces are fully enclosed.
+          let reach = mx;
+          for (const cell of cells.values()) {
+            const d = Math.hypot(
+              (cell.animX - (origin ? origin.x : 0)) - cx,
+              (cell.animY - (origin ? origin.y : 0)) - cy,
+            ) + cell.animRadius;
+            if (d > reach) reach = d;
+          }
+          return { x: cx, y: cy, radii: tr, maxR: mx, reach };
         };
         if (this._isAlive || (Server.isDualMode() && 0 < CellData.myCells.size)) {
           pair1 = pairCenter(CellData.myCells, null);
@@ -3794,19 +3809,27 @@
         let targetY = py;
         let targetR = (pair1 ? pair1.radii : 0) + (pair2 ? pair2.radii : 0);
         if (Server.isDualMode()) {
-          // Dual server: both owned cell groups arrive on ONE connection, so the
-          // inherited two-tab pair camera/zoom would frame the active AND the
-          // idle cell together (summing both radii and centering between them).
-          // That is the zoom problem: follow ONLY the active group instead.
+          // Dual server: both owned cell groups arrive on ONE connection and
+          // are both yours, so frame BOTH of them. The old code summed the two
+          // radii (targetR = radii1 + radii2) which over-zoomed and centered
+          // between them badly. Use half the separation + the larger bounding
+          // reach so the view tightly encloses both groups.
           this._pairCamera = false;
-          if (pair1) {
+          if (pair1 && pair2) {
+            const sep = Math.hypot(pair1.x - pair2.x, pair1.y - pair2.y);
+            const w1 = pair1.reach + 1;
+            const w2 = pair2.reach + 1;
+            targetX = (pair1.x * w1 + pair2.x * w2) / (w1 + w2);
+            targetY = (pair1.y * w1 + pair2.y * w2) / (w1 + w2);
+            targetR = sep / 2 + Math.max(pair1.reach, pair2.reach);
+          } else if (pair1) {
             targetX = pair1.x;
             targetY = pair1.y;
-            targetR = pair1.radii;
+            targetR = pair1.reach;
           } else if (pair2) {
             targetX = pair2.x;
             targetY = pair2.y;
-            targetR = pair2.radii;
+            targetR = pair2.reach;
           }
         } else if ("on" === Settings.pairCamera && pair1 && pair2) {
           // Close/far camera mode uses hysteresis so two nearby controlled cells
@@ -5258,6 +5281,11 @@
           }
           return true;
         }
+        if (inner && inner.length > 1 && 240 === inner[0] && 546 === inner.length && 1 === inner[1]) {
+          // Sealed MapInit: apply the opcode map and ack it (sealed).
+          this.applyProtoMap(inner, slot);
+          return true;
+        }
         if (inner && inner.length) {
           const dv = new DataView(inner.buffer, inner.byteOffset, inner.byteLength);
           PacketParser.parse(dv, slot);
@@ -5539,13 +5567,12 @@
       if (this.shieldHandleFrame(alh, adu)) {
         return;
       }
-      // 2026 proto-map negotiation: the server may open with a MapInit packet
-      // (opcode 240, 546 bytes, byte[1]===1). While we haven't resolved it,
-      // check the FIRST incoming frame - if it's MapInit, apply the opcode
-      // remap tables and ack; if it's anything else the server is legacy and
-      // we flush the queued handshake untouched. A consumed MapInit frame is
-      // not fed into the normal parser.
-      if (this._protoWaiting && this._protoWaiting[adu] && this.handleProto(alh, adu)) {
+      // 2026 proto-map negotiation: the server may send a MapInit packet
+      // (opcode 240, 546 bytes, byte[1]===1) while the opcode map is unknown.
+      // Always try to consume AND ack it, even when it arrives after HelloAck,
+      // otherwise the server can stall waiting for the ack and never send the
+      // world/spawn stream (the "cells hang, Play does nothing" symptom).
+      if (this.handleProto(alh, adu)) {
         return;
       }
       // Tab 3 is a transport-only hot standby. Its handshake is completed in
@@ -5558,6 +5585,7 @@
     static ["handleProto"](alh, adu) {
       const raw = new Uint8Array(alh.data);
       if (240 !== raw[0] || 546 !== raw.length || 1 !== raw[1]) {
+        if (!this._protoWaiting || !this._protoWaiting[adu]) return false;
         // Legacy server: no opcode remapping. Flush what we queued, then let
         // this first frame be parsed normally.
         this._protoWaiting[adu] = false;
@@ -5568,6 +5596,10 @@
         console.log("[proto] Tab " + adu + ": legacy (no opcode map)");
         return false;
       }
+      this.applyProtoMap(raw, adu);
+      return true;
+    }
+    static ["applyProtoMap"](raw, adu) {
       // MapInit: sendMap[r] = raw[18+r]; recvMap[raw[274+r]] = r.
       const sm = new Uint8Array(256);
       const rm = new Uint8Array(256);
@@ -5575,22 +5607,39 @@
         sm[r] = raw[18 + r];
         rm[raw[274 + r]] = r;
       }
+      this._protoSend = this._protoSend || {};
+      this._protoRecv = this._protoRecv || {};
+      this._protoQueue = this._protoQueue || {};
+      this._protoWaiting = this._protoWaiting || {};
       this._protoSend[adu] = sm;
       this._protoRecv[adu] = rm;
       this._protoWaiting[adu] = false;
       clearTimeout(this["_protoTimer" + adu]);
       console.log("[proto] Tab " + adu + ": MapInit applied, opcode remap active");
-      // Ack with the raw 17-byte MapAck (opcode 241 + raw[530..546)) - it is
-      // sent directly, NOT through send(), so the map itself never remaps it.
+      // Ack with the 17-byte MapAck (opcode 241 + raw[530..546)). It must NOT
+      // go through the opcode remap; if the shield is established it is sealed.
       const ack = new Uint8Array(17);
       ack[0] = 241;
       ack.set(raw.subarray(530, 546), 1);
-      const ws = 1 === adu ? this.ws : 2 === adu ? this.ws2 : this.ws3;
-      if (ws && ws.readyState === ws.OPEN) {
-        ws.send(ack.buffer);
-      }
+      this.sendControl(ack, adu);
       this.flushProtoQueue(adu);
-      return true;
+    }
+    static ["sendControl"](bytes, slot) {
+      // Send a control frame (MapAck) without applying the opcode map. Seal it
+      // when the shield session is established, exactly like the real client.
+      let payload = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      const entry = this._shield && this._shield[slot];
+      if (entry && entry.session && entry.established) {
+        try {
+          payload = entry.session.seal(payload);
+        } catch (e) {
+          console.log("[Drag+] shield seal error (control tab " + slot + ")", e);
+        }
+      }
+      const ws = 1 === slot ? this.ws : 2 === slot ? this.ws2 : this.ws3;
+      if (ws && ws.readyState === ws.OPEN) {
+        ws.send(payload);
+      }
     }
     static ["flushProtoQueue"](adu) {
       const q = this._protoQueue[adu] || [];
