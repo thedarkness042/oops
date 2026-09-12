@@ -1635,16 +1635,25 @@
     }
     static ["setServers"]() {
       let [ahh, s] = this.getServers();
+      const keys = Object.keys(ahh);
+      // Dual-only server list: keep just the modes whose name contains "dual".
+      // Fall back to the full list if Servers.php does not expose a dual mode,
+      // so the dropdown is never left empty.
+      const isDualKey = (key) => -1 !== String(key || "").toLowerCase().replace(/\s+/g, "").indexOf("dual");
+      let kept = keys.filter(isDualKey);
+      if (!kept.length) {
+        console.warn("[Server] No Dual mode found in Servers.php; showing all modes.");
+        kept = keys;
+      }
       let wt = "";
-      let ss = null;
-      let cl = null;
-      Object.keys(ahh).forEach((agu, da) => {
-        cl = agu.replace(/[^a-zA-Z0-9 ]/g, "");
+      kept.forEach((agu, da) => {
+        const cl = agu.replace(/[^a-zA-Z0-9 ]/g, "");
+        const id = "ffa" + (da + 1);
         wt =
           null != s[agu]
             ? wt +
-              '<option id="ffa' +
-              parseInt(da + 1) +
+              '<option id="' +
+              id +
               '" value="' +
               ahh[agu] +
               '">' +
@@ -1654,11 +1663,11 @@
               "/" +
               s[agu].max_players +
               "]</option>"
-            : wt + '<option id="ffa' + parseInt(da + 1) + '" value="' + ahh[agu] + '">' + agu + "</option>";
+            : wt + '<option id="' + id + '" value="' + ahh[agu] + '">' + agu + "</option>";
       });
-      ss = Math.floor(ahh.length * Math.random()) + 1;
       $("#servers").html(wt);
-      $("#opt_ffa" + ss).prop("selected", true);
+      const ss = kept.length ? Math.floor(kept.length * Math.random()) : 0;
+      $("#servers").prop("selectedIndex", ss);
       $(document).ready(function () {
         Server.joinServer($("#servers").val());
       });
