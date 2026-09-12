@@ -3454,6 +3454,14 @@
         zl.lastUpdateTime = GameLoop.time;
         if (zl.isMine) {
           rx["delete"](ahu);
+          // Dual mode: both owned groups share the slot-1 cell map, so a cell
+          // may be tracked in myCells2 even though it was parsed on slot 1.
+          // Drop it from BOTH groups or it lingers forever as a false "alive"
+          // and drags the camera/zoom to its death spot.
+          if (Server.isDualMode()) {
+            this.myCells["delete"](ahu);
+            this.myCells2["delete"](ahu);
+          }
         }
         dr["delete"](ahu);
         if (!zl.isFood) {
@@ -3468,6 +3476,10 @@
       if (lt) {
         if (lt.isMine) {
           aim["delete"](ao);
+          if (Server.isDualMode()) {
+            this.myCells["delete"](ao);
+            this.myCells2["delete"](ao);
+          }
         }
         bq["delete"](ao);
         if (!(lt.isFood || "on" !== Settings.eatAnimation)) {
@@ -3678,6 +3690,18 @@
       this._pairCamera = false;
     }
     static ["update"]() {
+      if (Server.isDualMode()) {
+        // Safety net: both owned groups share the slot-1 cell map in dual mode.
+        // Prune any tracked cell that is no longer in the map, so a cell that
+        // died without a proper group removal can never keep a group "alive"
+        // (blocking respawn) or drag the camera/zoom to its death position.
+        CellData.myCells.forEach((cell, id) => {
+          if (!CellData.cells.has(id)) CellData.myCells["delete"](id);
+        });
+        CellData.myCells2.forEach((cell, id) => {
+          if (!CellData.cells.has(id)) CellData.myCells2["delete"](id);
+        });
+      }
       if (0 < this.pieceCount1) {
         this.playing();
       } else {
