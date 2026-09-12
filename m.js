@@ -3809,27 +3809,24 @@
         let targetY = py;
         let targetR = (pair1 ? pair1.radii : 0) + (pair2 ? pair2.radii : 0);
         if (Server.isDualMode()) {
-          // Dual server: both owned cell groups arrive on ONE connection and
-          // are both yours, so frame BOTH of them. The old code summed the two
-          // radii (targetR = radii1 + radii2) which over-zoomed and centered
-          // between them badly. Use half the separation + the larger bounding
-          // reach so the view tightly encloses both groups.
+          // Dual server: both owned groups are yours. Keep the ACTIVE group
+          // centered so the camera never drifts to the middle between the two
+          // cells (the "I'm off to the side" symptom), and only widen the view
+          // to include the idle cell while it is CLOSE. Widening it always is
+          // what made the zoom run away after the cells separated.
           this._pairCamera = false;
-          if (pair1 && pair2) {
-            const sep = Math.hypot(pair1.x - pair2.x, pair1.y - pair2.y);
-            const w1 = pair1.reach + 1;
-            const w2 = pair2.reach + 1;
-            targetX = (pair1.x * w1 + pair2.x * w2) / (w1 + w2);
-            targetY = (pair1.y * w1 + pair2.y * w2) / (w1 + w2);
-            targetR = sep / 2 + Math.max(pair1.reach, pair2.reach);
-          } else if (pair1) {
-            targetX = pair1.x;
-            targetY = pair1.y;
-            targetR = pair1.reach;
-          } else if (pair2) {
-            targetX = pair2.x;
-            targetY = pair2.y;
-            targetR = pair2.reach;
+          const active = pair1 || pair2;
+          const other = pair1 ? pair2 : null;
+          if (active) {
+            targetX = active.x;
+            targetY = active.y;
+            targetR = active.reach;
+            if (other) {
+              const sep = Math.hypot(active.x - other.x, active.y - other.y);
+              if (sep <= 2200) {
+                targetR = Math.max(active.reach, sep + other.reach);
+              }
+            }
           }
         } else if ("on" === Settings.pairCamera && pair1 && pair2) {
           // Close/far camera mode uses hysteresis so two nearby controlled cells
