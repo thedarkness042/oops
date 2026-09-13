@@ -3850,27 +3850,13 @@
         let targetY = py;
         let targetR = (pair1 ? pair1.radii : 0) + (pair2 ? pair2.radii : 0);
         if (Server.isDualMode()) {
-          // Dual server: both owned groups are yours. Respect the Pair camera
-          // setting exactly. OFF -> follow ONLY the active group (no widening,
-          // nothing can pull the camera). ON -> frame both with hysteresis.
-          const pairing = "on" === Settings.pairCamera;
-          this._pairCamera = pairing && Boolean(pair1 && pair2);
-          if (!pairing) {
-            const followed = pair1 || pair2;
-            if (followed) {
-              targetX = followed.x;
-              targetY = followed.y;
-              targetR = followed.reach;
-            }
-          } else if (pair1 && pair2) {
-            const dist = Math.hypot(pair1.x - pair2.x, pair1.y - pair2.y);
-            const w1 = pair1.reach + 1;
-            const w2 = pair2.reach + 1;
-            targetX = (pair1.x * w1 + pair2.x * w2) / (w1 + w2);
-            targetY = (pair1.y * w1 + pair2.y * w2) / (w1 + w2);
-            targetR = Math.max(dist / 2 + Math.max(pair1.reach, pair2.reach), pair1.reach);
-          } else if (pair1 || pair2) {
-            const followed = pair1 || pair2;
+          // Dual server: both owned groups are yours, but only ONE is actively
+          // driven. Frame ONLY the active group so the camera never zooms out to
+          // fit the idle cell (framing both cells was what pulled/zoomed the
+          // camera and made it feel broken). Ignore Pair camera in dual mode.
+          this._pairCamera = false;
+          const followed = pair1 || pair2;
+          if (followed) {
             targetX = followed.x;
             targetY = followed.y;
             targetR = followed.reach;
