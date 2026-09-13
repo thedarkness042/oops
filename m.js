@@ -3850,24 +3850,30 @@
         let targetY = py;
         let targetR = (pair1 ? pair1.radii : 0) + (pair2 ? pair2.radii : 0);
         if (Server.isDualMode()) {
-          // Dual server: both owned groups are yours. Keep the ACTIVE group
-          // centered so the camera never drifts to the middle between the two
-          // cells (the "I'm off to the side" symptom), and only widen the view
-          // to include the idle cell while it is CLOSE. Widening it always is
-          // what made the zoom run away after the cells separated.
-          this._pairCamera = false;
-          const active = pair1 || pair2;
-          const other = pair1 ? pair2 : null;
-          if (active) {
-            targetX = active.x;
-            targetY = active.y;
-            targetR = active.reach;
-            if (other) {
-              const sep = Math.hypot(active.x - other.x, active.y - other.y);
-              if (sep <= 2200) {
-                targetR = Math.max(active.reach, sep + other.reach);
-              }
+          // Dual server: both owned groups are yours. Respect the Pair camera
+          // setting exactly. OFF -> follow ONLY the active group (no widening,
+          // nothing can pull the camera). ON -> frame both with hysteresis.
+          const pairing = "on" === Settings.pairCamera;
+          this._pairCamera = pairing && Boolean(pair1 && pair2);
+          if (!pairing) {
+            const followed = pair1 || pair2;
+            if (followed) {
+              targetX = followed.x;
+              targetY = followed.y;
+              targetR = followed.reach;
             }
+          } else if (pair1 && pair2) {
+            const dist = Math.hypot(pair1.x - pair2.x, pair1.y - pair2.y);
+            const w1 = pair1.reach + 1;
+            const w2 = pair2.reach + 1;
+            targetX = (pair1.x * w1 + pair2.x * w2) / (w1 + w2);
+            targetY = (pair1.y * w1 + pair2.y * w2) / (w1 + w2);
+            targetR = Math.max(dist / 2 + Math.max(pair1.reach, pair2.reach), pair1.reach);
+          } else if (pair1 || pair2) {
+            const followed = pair1 || pair2;
+            targetX = followed.x;
+            targetY = followed.y;
+            targetR = followed.reach;
           }
         } else if ("on" === Settings.pairCamera && pair1 && pair2) {
           // Close/far camera mode uses hysteresis so two nearby controlled cells
@@ -5889,33 +5895,18 @@
       };
     }
     static ["connectionStatus"]() {
-      const status = this.statusSnapshot();
-      let hud = document.getElementById("drag-plus-connection-status");
-      if (!hud && document.body) {
-        hud = document.createElement("div");
-        hud.id = "drag-plus-connection-status";
-        hud.style.cssText = "position:fixed;right:10px;top:205px;z-index:2147483000;min-width:310px;max-width:calc(100vw - 20px);box-sizing:border-box;color:#f1f1f1;background:rgba(5,5,9,.9);border:1px solid rgba(255,255,255,.22);border-radius:6px;padding:6px 8px;font:11px/1.3 Arial,sans-serif;pointer-events:auto;white-space:normal;text-align:right;text-shadow:0 1px 2px #000;box-shadow:0 4px 16px rgba(0,0,0,.28)";
-        hud.title = "Standby Tab 3 hot backup: K or /kill manually promotes it.";
-        hud.innerHTML = '<div data-dragplus-role="status" style="white-space:nowrap"></div>';
-        const stopHudEvent = event => event.stopPropagation();
-        for (const eventName of ["pointerdown", "mousedown", "mouseup", "touchstart", "touchend", "keydown", "keyup"]) {
-          hud.addEventListener(eventName, stopHudEvent);
-        }
-        document.body.appendChild(hud);
-      }
-      if (hud) {
-        hud.style.top = "205px";
-        const line = hud.querySelector('[data-dragplus-role="status"]');
-        if (line) {
-          line.textContent = "Drag+ Backup | Tab 1: " + status.tab1 + " | Tab 2: " + status.tab2 + " | Standby 3: " + status.tab3;
-        }
-      }
-      return status;
+      // Status HUD removed: in dual mode there is no second socket or standby
+      // tab, so "Tab 1 / Tab 2 / Standby 3" was misleading. The status API
+      // (statusSnapshot / DRAG_PLUS.backupStatus) is kept for tooling.
+      const hud = document.getElementById("drag-plus-connection-status");
+      if (hud) hud.remove();
+      return this.statusSnapshot();
     }
     static ["startConnectionStatus"]() {
+      const hud = document.getElementById("drag-plus-connection-status");
+      if (hud) hud.remove();
       if (this.connectionStatusTimer) clearInterval(this.connectionStatusTimer);
-      this.connectionStatusTimer = setInterval(() => this.connectionStatus(), 500);
-      setTimeout(() => this.connectionStatus(), 0);
+      this.connectionStatusTimer = null;
     }
     static ["registerKeyBindings"]() {
       if (this.keyBindingsRegistered) return;
@@ -7880,6 +7871,19 @@
         this.skinMap.set(k2, u2);
       } else if (arb) {
         this.skinMap.set(k2, arb);
+      }
+      // Dual: your two cells carry separate server colors, so the color-keyed
+      // k1/k2 entries only matched ONE cell (the one whose color equalled
+      // colorHex/colorHex2). Register the tab-1 skin URL for EVERY owned
+      // fragment's actual color so the same Skin URL covers both cells.
+      const ownUrl = u1 || arb;
+      if (ownUrl) {
+        for (const cell of CellData.myCells.values()) {
+          if (cell) this.skinMap.set(this.skinKey(Player.nick, cell.colorHex), ownUrl);
+        }
+        for (const cell of CellData.myCells2.values()) {
+          if (cell) this.skinMap.set(this.skinKey(Player.nick, cell.colorHex), ownUrl);
+        }
       }
       for (const agl of RelayData.teamPlayers.values())
         if (agl.isAlive) {
