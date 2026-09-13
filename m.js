@@ -3799,7 +3799,14 @@
           let tw = 0;
           let tr = 0;
           let mx = 0;
+          // Ignore fragments that stopped receiving updates (dead/removed).
+          // Without this, a cell id that lingers for a moment after death keeps
+          // its last position in the map and drags the camera/zoom back to the
+          // spot where it died. Ryuten's camera never follows dead cells.
+          const freshCutoffMs = 900;
+          const isFresh = (cell) => !cell.lastUpdateTime || (GameLoop.time - cell.lastUpdateTime) <= freshCutoffMs;
           for (const cell of cells.values()) {
+            if (!isFresh(cell)) continue;
             cell.animate();
             const weight = Math.max(1, cell.animRadius * cell.animRadius);
             tx += (cell.animX - (origin ? origin.x : 0)) * weight;
@@ -3821,6 +3828,7 @@
           // Used for dual framing so split pieces are fully enclosed.
           let reach = mx;
           for (const cell of cells.values()) {
+            if (!isFresh(cell)) continue;
             const d = Math.hypot(
               (cell.animX - (origin ? origin.x : 0)) - cx,
               (cell.animY - (origin ? origin.y : 0)) - cy,
